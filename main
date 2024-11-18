@@ -1,0 +1,189 @@
+<?
+
+global $_SERVER;
+$_SERVER["DOCUMENT_ROOT"] = realpath(dirname(__FILE__)."/..");
+
+// email setup
+define("EMAIL", "email@email.ru");
+
+define("TOKEN", "");
+
+// domain setup
+define("DOMEN", idn_to_utf8(basename($_SERVER["DOCUMENT_ROOT"])));
+
+// backup path
+define("PATH", $_SERVER["DOCUMENT_ROOT"]."/bitrix/backup");
+
+// yandex path
+define("PATH_YA", "/backup/".DOMEN);
+
+// folder directory yandex
+define("DIR", DOMEN."_".date("Ymd"));
+
+// bitrix mask
+define("FILES_BITRIX", (mb_strlen(preg_replace("/[^a-z]/iu", "", DOMEN)) ? mb_substr(DOMEN, 0, 20)."_" : "").date("Ymd"));
+
+// number of backups
+define("COUNT", 10);
+
+function getUrl($url, $options=[]) {
+	$ch = curl_init($url);
+	if (in_array("PUT", $options)) {
+		curl_setopt($ch, CURLOPT_PUT, true);
+	}
+	if (in_array("UPLOAD", $options)) {
+		curl_setopt($ch, CURLOPT_UPLOAD, true);
+	}
+	if (in_array("DELETE", $options)) {
+		curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "DELETE");
+	}
+	if (array_key_exists("INFILESIZE", $options)) {
+		curl_setopt($ch, CURLOPT_INFILESIZE, $options["INFILESIZE"]);
+	}
+	if (array_key_exists("INFILE", $options)) {
+		curl_setopt($ch, CURLOPT_INFILE, $options["INFILE"]);
+	}
+	if (in_array("AUTH", $options)) {
+		curl_setopt($ch, CURLOPT_HTTPHEADER, array("Authorization: OAuth ".TOKEN));
+	}
+	curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+	curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+	curl_setopt($ch, CURLOPT_HEADER, false);
+	$res = curl_exec($ch);
+	$http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+	curl_close($ch);
+	$res = @json_decode($res, true);
+	$result = ["http_code" => $http_code, "res" => $res];
+	return $result;
+}
+
+if (!empty($argv[1]) && $argv[1] == "demo") {
+
+	echo "<pre>";
+	print_r("Добавление тестовых директорий");
+	echo "</pre>";
+
+	$dirs = [];
+	for ($i=1; $i <= 10; $i++) {
+		$dirs[] = DOMEN.date("Ym").str_pad($i, 2, "0", STR_PAD_LEFT);
+	}
+
+	foreach ($dirs as $key => $value) {
+		// создаем директорию
+		$url = "https://cloud-api.yandex.net/v1/disk/resources/?path=".urlencode(PATH_YA."/".$value);
+		$request = getUrl($url, ["AUTH", "PUT"]);
+
+		if (in_array($request["http_code"], [201, 202, 204])) {
+			echo "<pre>";
+			echo "Успешно создано - ".PATH_YA."/".$value;
+			echo "</pre>";
+		}
+	}
+
+	exit;
+}
+
+if (!empty($argv[1]) && $argv[1] == "clear") {
+
+	echo "<pre>";
+	print_r("Удаление всех бэкапов");
+	echo "</pre>";
+
+	$url = "https://cloud-api.yandex.net/v1/disk/resources?path=".urlencode(PATH_YA)."&fields=_embedded.items.name,_embedded.items.type&limit=100";
+	$request = getUrl($url, ["AUTH"]);
+
+	echo "<pre>";
+	print_r($request["res"]);
+	echo "</pre>";
+
+	if (!empty($request["res"]["_embedded"]["items"])) {
+
+		foreach ($request["res"]["_embedded"]["items"] as $key => $value) {
+			$url = "https://cloud-api.yandex.net/v1/disk/resources?path=".urlencode(PATH_YA."/".$value["name"])."&permanently=true";
+			$request = getUrl($url, ["AUTH", "DELETE"]);
+
+			if (in_array($request["http_code"], [201, 202, 204])) {
+				echo "<pre>";
+				echo "Успешно удалено - ".PATH_YA."/".$value["name"];
+				echo "</pre>";
+			}
+		}
+	}
+
+	exit;
+}
+
+$result = [0,0];
+
+foreach (glob(PATH."/".FILES_BITRIX."_*") as $file) {
+
+	if (array_sum($result) == 0) {
+
+		echo "<pre>";
+		print_r("Удаление старых бэкапов");
+		echo "</pre>";
+
+		$url = "https://cloud-api.yandex.net/v1/disk/resources?path=".urlencode(PATH_YA)."&fields=_embedded.items.name,_embedded.items.type&limit=100";
+		$request = getUrl($url, ["AUTH"]);
+
+		echo "<pre>";
+		print_r($request["res"]);
+		echo "</pre>";
+
+		if (!empty($request["res"]["_embedded"]["items"]) && count($request["res"]["_embedded"]["items"]) > (COUNT - 1)) {
+
+			$old = array_slice($request["res"]["_embedded"]["items"], 0, count($request["res"]["_embedded"]["items"]) - (COUNT - 1));
+			foreach ($old as $key => $value) {
+				$url = "https://cloud-api.yandex.net/v1/disk/resources?path=".urlencode(PATH_YA."/".$value["name"])."&permanently=true";
+				$request = getUrl($url, ["AUTH", "DELETE"]);
+
+				if (in_array($request["http_code"], [201, 202, 204])) {
+					echo "<pre>";
+					echo "Успешно удалено - ".PATH_YA."/".$value["name"];
+					echo "</pre>";
+				}
+			}
+		}
+
+		echo "<pre>";
+		print_r("Создание директории на Ядиске");
+		echo "</pre>";
+
+		$url = "https://cloud-api.yandex.net/v1/disk/resources/?path=".urlencode(PATH_YA."/".DIR);
+		$request = getUrl($url, ["AUTH", "PUT"]);
+
+		if (in_array($request["http_code"], [201, 202, 204])) {
+			echo "<pre>";
+			echo "Успешно создано - ".PATH_YA."/".DIR;
+			echo "</pre>";
+		}
+
+	}
+
+	$url = "https://cloud-api.yandex.net/v1/disk/resources/upload?path=".urlencode(PATH_YA."/".DIR."/".basename($file));
+	$request = getUrl($url, ["AUTH"]);
+
+	if (empty($request["res"]["error"])) {
+
+		$fp = fopen($file, "r");
+
+		$url = $request["res"]["href"];
+		$request = getUrl($url, ["PUT", "UPLOAD", "INFILESIZE" => filesize($file), "INFILE" => $fp]);
+
+		if (in_array($request["http_code"], [201])) {
+			echo "File ".basename($file)." uploaded<br>";
+			$result[0]++;
+		} else {
+			$result[1]++;
+			echo "File ".basename($file)." error - ".$http_code."<br>";
+		}
+
+		fclose($fp);
+	}
+}
+
+if (array_sum($result) == 0) {
+	mail(EMAIL, DOMEN." backup yandex", "Отсутствует резервная копия сайта.");
+}
+
+?>
